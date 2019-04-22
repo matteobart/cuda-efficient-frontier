@@ -24,7 +24,7 @@ float* readFile(char* filename){
     char* token;
     int lineCount = 0; 
     fgets(line, 255, ptr); //grab the first line and do nothing
-    while (fgets(line, 255, ptr) != 0 && lineCount < 100){ //for each line
+    while (fgets(line, 255, ptr) != 0 && lineCount < NUM_ELEMENTS){ //for each line
         int dataCount = 0;
         token = strtok(line, ",");
         while (token != 0) { //for each word in line
@@ -194,15 +194,22 @@ void gold(int argc, char* argv[]){
 
 __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfStocks)
 {
-    //POTENENTIAL FOR SHARED MEMORY HERE EACH CLOSING PRICE GETS USED TWICE PER BLOCK
-    int stockId = threadIdx.y;
+    __shared__ float closing[NUM_ELEMENTS];
+    int stockId = blockIdx.x;
     int returnId = threadIdx.x; 
 
-    int grab1 = returnId + (stockId * NUM_ELEMENTS); //also write 2
-    int grab2 = returnId+1 + (stockId * NUM_ELEMENTS); 
+    int grab = returnId + (stockId * NUM_ELEMENTS); //also write 2
 
-    int to = returnId + (stockId*(NUM_ELEMENTS-1));
-    returns[to] = (closingPrices[grab2]-closingPrices[grab1])/closingPrices[grab1];
+    //everyone load into shared
+    closing[returnId] = closingPrices[grab];
+
+    if (grab != NUM_ELEMENTS-1){//last thread should do this
+        int to = returnId + (stockId*(NUM_ELEMENTS-1));
+        returns[to] = (closing[returnId+1]-closing[returnId])/closing[returnId];
+    }
+    //int grab2 = returnId+1 + (stockId * NUM_ELEMENTS); 
+
+    //returns[to] = (closingPrices[grab2]-closingPrices[grab1])/closingPrices[grab1];
 }
 
 //where mid is greater power of 2 less than or equal to number of elements
@@ -243,8 +250,11 @@ __global__ void GStd(float* returns, float* averages, float* std, int numOfStock
 }   
 
 __global__ void GCovariance(float* returns, float* averages,float* covariance, int numberOfStocks){
+   // __shared__ float s_returns[]
+
     int b = threadIdx.x;
     int a = threadIdx.y;
+
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
         sum += (returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
@@ -332,7 +342,7 @@ void gpu (int argc, char* argv[]) {
 
 
     dim3 blockSize (NUM_ELEMENTS-1, argc-1);
-    GPercentReturns<<<1,blockSize>>>(d_closingPrices, d_returns, argc-1);
+    GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_returns, argc-1);
     cudaMemcpy(returns, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
     //calculate the average
 
