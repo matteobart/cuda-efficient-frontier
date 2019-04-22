@@ -131,6 +131,8 @@ void gold(int argc, char* argv[]){
         //then choose x numbers
         //then find the sum of the randoms
         //then divide each random number by sum
+    clock_t start = clock(), diff;
+   
     srand(time(NULL));   // Initialization, should only be called once.
     float* risk = (float*) malloc(sizeof(float)* NUM_PORTFOLIOS);
     float* reward =(float*) malloc(sizeof(float)* NUM_PORTFOLIOS);
@@ -178,6 +180,11 @@ void gold(int argc, char* argv[]){
             }
         } 
     }
+
+    diff = clock() - start;
+    int msec = diff * 1000 / CLOCKS_PER_SEC;
+    printf("Time taken for just portfolios %d seconds %d milliseconds\n", msec/1000, msec%1000);
+    
 
     //plot the data
     writeFile("riskreturngold.txt", reward, risk, NUM_PORTFOLIOS);
@@ -379,6 +386,14 @@ void gpu (int argc, char* argv[]) {
         }
     }
 
+    //timing just for portfolio
+    float time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+    //END
+
     float* risk = (float*) malloc(sizeof(float)*NUM_PORTFOLIOS);
     float* reward = (float*) malloc(sizeof(float)*NUM_PORTFOLIOS);
     float* d_risk;
@@ -400,6 +415,14 @@ void gpu (int argc, char* argv[]) {
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
 
     cudaDeviceSynchronize();
+
+    //START
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&time, start, stop);
+    //END
+    printf("Time for portfolio: %f s\n", time/1000);
+
     writeFile("riskreturn.txt", reward, risk, NUM_PORTFOLIOS);
 
 }
@@ -410,7 +433,7 @@ void gpu (int argc, char* argv[]) {
 
 
 
-int main( int argc, char* argv[] )
+int main( int argc, char* argv[])
 {
 
     clock_t start = clock(), diff;
