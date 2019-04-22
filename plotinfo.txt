@@ -1,0 +1,1 @@
+plot 'riskreturn.txt' with points pt 0
