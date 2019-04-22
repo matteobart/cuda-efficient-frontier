@@ -202,10 +202,12 @@ __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfS
 
     //everyone load into shared
     closing[returnId] = closingPrices[grab];
+    __syncthreads();
 
-    if (grab != NUM_ELEMENTS-1){//last thread should do this
+    if (returnId != NUM_ELEMENTS-1){//last thread should do this
         int to = returnId + (stockId*(NUM_ELEMENTS-1));
         returns[to] = (closing[returnId+1]-closing[returnId])/closing[returnId];
+
     }
     //int grab2 = returnId+1 + (stockId * NUM_ELEMENTS); 
 
@@ -274,6 +276,15 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     float r = curand_uniform(&state[tid+bid*blockDim.x]);
     //printf("%f\n", f);
     //atomicAdd(&totalWeight, r);
+
+    randomWeights[tid] = r;
+    __syncthreads();
+    atomicAdd(&randomWeights[0], r);
+    __syncthreads();
+    float totalWeight = randomWeights[0];
+    __syncthreads();
+    randomWeights[tid] = r/totalWeight;
+    /*
     randomWeights[tid] = r;
 
 
@@ -285,6 +296,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     for (int s = mid; s > 0; s /= 2){
         if (tid < s) 
             randomWeights[tid] += randomWeights[tid+s];
+        __syncthreads();
     }
 
     __syncthreads();
@@ -292,7 +304,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     __syncthreads();
     randomWeights[tid] = (float) r/ totalWeight;
     __syncthreads();
-
+*/
 
     // __syncthreads();
     // if (bid == 0 && tid == 0) {
