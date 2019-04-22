@@ -240,14 +240,32 @@ __global__ void GReduceAverage(float* returns, float* average, int numOfStocks, 
     
 }
 
-__global__ void GStd(float* returns, float* averages, float* std, int numOfStocks){
+
+__global__ void GStd(float* returns, float* averages, float* std, int numOfStocks, int mid){
+    extern __shared__ float s_std[];
     int returnId = threadIdx.x;
     int stockId = blockIdx.x;
-    atomicAdd(&std[stockId], powf(returns[stockId*(NUM_ELEMENTS-1)+returnId]-averages[stockId], 2));
+    int dim = blockDim.x;
+    float add = powf(returns[stockId*(NUM_ELEMENTS-1)+returnId]-averages[stockId], 2);
+    s_std[returnId] = add;
+    __syncthreads();
+
+    if (returnId<mid && returnId+mid<dim){
+        s_std[returnId]+=s_std[returnId+mid];
+    }
+    __syncthreads();
+    for (int s = mid/2; s > 0; s/=2){
+        if (returnId < s) {
+            s_std[returnId]+=s_std[returnId+s];
+        }
+        __syncthreads();
+    }
+
+
+    //atomicAdd(&std[stockId], powf(returns[stockId*(NUM_ELEMENTS-1)+returnId]-averages[stockId], 2));
     __syncthreads();
     if (returnId == 0) {
-        std[stockId]/=NUM_ELEMENTS-2;
-        std[stockId] = sqrt(std[stockId]);
+        std[stockId]= sqrt(s_std[0]/(NUM_ELEMENTS-2));
     }
 }   
 
@@ -387,7 +405,8 @@ void gpu (int argc, char* argv[]) {
     float* d_std;
     cudaMalloc(&d_std, sizeof(float)*(argc-1)); 
 
-    GStd<<<argc-1, NUM_ELEMENTS-1>>>(d_returns, d_averages, d_std, argc-1);
+    GStd<<<argc-1, NUM_ELEMENTS-1, sizeof(float)*(NUM_ELEMENTS-1)>>>(d_returns, d_averages, d_std, argc-1, mid);
+
     cudaMemcpy(std, d_std, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
     
     for (int a = 0; a < argc-1; a++){
