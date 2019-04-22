@@ -9,7 +9,7 @@
 //time period: Apr 01 2016 -> Apr 01 2019
 //freq: Weekly
 #define NUM_ELEMENTS 100 //why when I change this everything breaks
-#define NUM_PORTFOLIOS 100000
+#define NUM_PORTFOLIOS atoi(argv[argc])
 
 
 float* readFile(char* filename){
@@ -69,6 +69,7 @@ float* getPercentReturns(float* nums, int len){
 //still need to plot
 //why am I mallocing
 void gold(int argc, char* argv[]){
+    argc--;
     if (argc < 3) {
         printf("%s\n", "Expected more arguments");
         exit(0);
@@ -307,7 +308,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
 __global__ void init_stuff(curandState*state){int idx=blockIdx.x*blockDim.x+threadIdx.x;curand_init(1337,idx,0,&state[idx]);}
 
 void gpu (int argc, char* argv[]) {
-
+    argc--;
     float* closingPrices = (float*) malloc(sizeof(float)*(argc-1)*NUM_ELEMENTS);
     float* returns = (float*) malloc(sizeof(float)*(argc-1)*(NUM_ELEMENTS-1));
     float* averages = (float*) malloc(sizeof(float)*(argc-1));
