@@ -8,9 +8,9 @@
 //to get data yahoo finance
 //time period: Apr 01 2016 -> Apr 01 2019
 //freq: Weekly
-#define NUM_ELEMENTS 100 //why when I change this everything breaks
+#define NUM_ELEMENTS 100 //why when I change this everything breaks & this should not change because constant memory 
 #define NUM_PORTFOLIOS atoi(argv[argc])
-#define MAX_NUM_OF_STOCKS 158
+#define MAX_NUM_OF_STOCKS 85
 
 
 float* readFile(char* filename){
@@ -79,7 +79,7 @@ void gold(int argc, char* argv[]){
     float** closingPrices = (float**) malloc(sizeof(float*)*(argc-1));
     float** returns = (float**) malloc(sizeof(float*)*(argc-1));
     float* averages = (float*) malloc(sizeof(float)*(argc-1));
-
+    printf("%s\n", "here");
     for (int a = 1; a < argc; a++){
         closingPrices[a-1] = readFile(argv[a]);
         returns[a-1] = getPercentReturns(closingPrices[a-1], NUM_ELEMENTS);
@@ -196,6 +196,7 @@ void gold(int argc, char* argv[]){
 __constant__ float c_returns[MAX_NUM_OF_STOCKS * 99];
 __constant__ float c_averages[MAX_NUM_OF_STOCKS];
 __constant__ float c_std[MAX_NUM_OF_STOCKS];
+__constant__ float c_covariance[MAX_NUM_OF_STOCKS*MAX_NUM_OF_STOCKS];
 
 __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfStocks)
 {
@@ -293,7 +294,7 @@ __global__ void GCovariance(float* covariance, int numberOfStocks){
 }
 
 
-__global__ void GPortfolio(curandState*state, float* covariance, float* risk, float* reward, int numberOfStocks, int mid){
+__global__ void GPortfolio(curandState*state, float* risk, float* reward, int numberOfStocks, int mid){
     //obscene amount of global calls here
     //only one call to risk[] and reward[] at the end
     //also there might be a GPU version of sqrt()
@@ -374,7 +375,7 @@ __global__ void GPortfolio(curandState*state, float* covariance, float* risk, fl
     //FAST
     float work = 0;
     for (int c = 0; c < numberOfStocks; c++){
-         work += randomWeights[c]*covariance[c*numberOfStocks+tid];
+         work += randomWeights[c]*c_covariance[c*numberOfStocks+tid];
     }
     scratch[tid] = work*randomWeights[tid];
 
@@ -484,6 +485,7 @@ void gpu (int argc, char* argv[]) {
     blockSize.y = argc-1;
     GCovariance<<<1,blockSize>>>(d_covariance, argc-1);
     cudaMemcpy(covariance, d_covariance, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
+    cudaMemcpyToSymbol(c_covariance, covariance, sizeof(float) * (argc-1)*(argc-1));
 
     for (int a = 0; a < argc-1; a++){
         for (int b = 0; b <argc-1; b++){
@@ -514,7 +516,7 @@ void gpu (int argc, char* argv[]) {
     while (mid * 2 <= argc-1){
         mid *= 2;
     }
-    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_covariance, d_risk, d_reward, argc-1, mid);
+    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_risk, d_reward, argc-1, mid);
     printf("Middy %d\n",mid);
     cudaMemcpy(risk, d_risk, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);

@@ -1,2 +1,2 @@
 make
-./reg XOM.csv ^VIX.csv AMZN.csv AVGO.csv BA.csv BABA.csv BTC-USD.csv CMG.csv DIS.csv DPZ.csv EA.csv FB.csv FDX.csv GE.csv GOOG.csv IRBT.csv JPM.csv KO.csv NFLX.csv NVDA.csv PFE.csv PZZA.csv SBUX.csv SHOP.csv TMUS.csv TSCO.csv TSLA.csv TTWO.csv TWTR.csv WFC.csv WMT.csv
+./reg CSVs/XOM.csv CSVs/^VIX.csv CSVs/AMZN.csv CSVs/AVGO.csv CSVs/BA.csv CSVs/BABA.csv CSVs/BTC-USD.csv CSVs/CMG.csv CSVs/DIS.csv CSVs/DPZ.csv CSVs/EA.csv CSVs/FB.csv CSVs/FDX.csv CSVs/GE.csv CSVs/GOOG.csv CSVs/IRBT.csv CSVs/KO.csv CSVs/NFLX.csv CSVs/NVDA.csv CSVs/PFE.csv CSVs/PZZA.csv CSVs/SBUX.csv CSVs/SHOP.csv CSVs/TMUS.csv CSVs/TSCO.csv CSVs/TSLA.csv CSVs/TTWO.csv CSVs/TWTR.csv CSVs/WFC.csv CSVs/WMT.csv 100000
