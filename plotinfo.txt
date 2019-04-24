@@ -1,1 +1,3 @@
-plot 'riskreturn.txt' with points pt 0
+set xlabel "Risk (Standard Deviations)"
+set ylabel "Return (Weekly Percent)"
+plot 'riskreturngold1.txt' with points pt 0
