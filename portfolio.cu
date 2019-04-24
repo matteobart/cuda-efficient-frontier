@@ -283,66 +283,115 @@ __global__ void GCovariance(float* returns, float* averages,float* covariance, i
     covariance[a*numberOfStocks+b] = sum;
 }
 
+
 __global__ void GPortfolio(curandState*state, float* averages, float* covariance, float* risk, float* reward, int numberOfStocks, int mid){
     //obscene amount of global calls here
     //only one call to risk[] and reward[] at the end
     //also there might be a GPU version of sqrt()
-    extern __shared__ float randomWeights[];
+    extern __shared__ float sharedMemory[];
+    float* randomWeights = (float*) &sharedMemory[0];
+    float* scratch = (float*) &sharedMemory[numberOfStocks];
+    
+    //__shared__ float randomWeights[16];
+    //__shared__ float scratch[16];
+
+
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
     float r = curand_uniform(&state[tid+bid*blockDim.x]);
-    //printf("%f\n", f);
-    //atomicAdd(&totalWeight, r);
-
+    
+    //RAN WEIGHT
+    //FAST- WORKS
     randomWeights[tid] = r;
-    __syncthreads();
-    atomicAdd(&randomWeights[0], r);
-    __syncthreads();
-    float totalWeight = randomWeights[0];
-    __syncthreads();
-    randomWeights[tid] = r/totalWeight;
-    /*
-    randomWeights[tid] = r;
-
-
     __syncthreads();
     //quick reduce
-    if (tid < mid && tid + mid < numberOfStocks){
-        randomWeights[tid] += randomWeights[tid+mid];
+    if (tid > mid){
+    //if (tid<mid && tid+mid<numberOfStocks){
+        //randomWeights[tid] += randomWeights[tid+mid];
+
+        randomWeights[tid-mid] += randomWeights[tid];
     }
-    for (int s = mid; s > 0; s /= 2){
+    __syncthreads();
+
+    for (int s = mid/2; s > 0; s /= 2){
         if (tid < s) 
             randomWeights[tid] += randomWeights[tid+s];
         __syncthreads();
     }
-
-    __syncthreads();
     float totalWeight = randomWeights[0];
     __syncthreads();
     randomWeights[tid] = (float) r/ totalWeight;
-    __syncthreads();
-*/
 
+    //SLOW-IGNORE
+    // randomWeights[tid] = r;
     // __syncthreads();
-    // if (bid == 0 && tid == 0) {
-    //     for (int a = 0; a < numberOfStocks; a++){
-    //         printf("R: %f \n", randomWeights[a]);
-    //     }
-    // }   
+    // atomicAdd(&randomWeights[0], r);
+    // __syncthreads();
+    // float totalWeight = randomWeights[0];
+    // __syncthreads();
+    // randomWeights[tid] = r/totalWeight;
 
-    reward[bid] = 0;
-    atomicAdd(&reward[bid], averages[tid]*randomWeights[tid]);
+    //RETURN
+    //FAST
 
+
+    scratch[tid] = averages[tid]*randomWeights[tid];
+    __syncthreads();
+    if (tid > mid){
+        scratch[tid-mid] += scratch[tid];
+        if (tid >= numberOfStocks) printf("%d\n", tid);
+        if (tid-mid < 0) printf("%d", tid-mid);
+    }
+    __syncthreads();
+    for (int s = mid/2; s > 0; s /= 2){
+        if (tid < s) {
+            scratch[tid] += scratch[tid+s];
+            //printf("i %d %d\n",tid ,tid+s);
+
+        }
+        __syncthreads();
+    }
+    reward[bid] = scratch[0];
+    __syncthreads();
+
+    //SLOW
+    // reward[bid] = 0;
+    // atomicAdd(&reward[bid], averages[tid]*randomWeights[tid]);
+    // __syncthreads();
+    //if (tid == 0) printf("%d: %f %f\n", bid, reward[bid], deleteMe);
+
+    //RISK
+    //FAST
     float work = 0;
     for (int c = 0; c < numberOfStocks; c++){
          work += randomWeights[c]*covariance[c*numberOfStocks+tid];
     }
+    scratch[tid] = work*randomWeights[tid];
 
-    atomicAdd(&risk[bid], work * randomWeights[tid]);
     __syncthreads();
-    if (tid == 0)
-        risk[bid] = sqrt(risk[bid]);
+    if (tid > mid){
+        scratch[tid-mid] += scratch[tid];
+    }
+    __syncthreads();
+
+    for (int s = mid/2; s > 0; s /= 2){
+        if (tid < s) 
+            scratch[tid] += scratch[tid+s];
+        __syncthreads();
+    }
+    risk[bid] = sqrt(scratch[0]);
+
+    //SLOW
+    // float work = 0;
+    // for (int c = 0; c < numberOfStocks; c++){
+    //      work += randomWeights[c]*covariance[c*numberOfStocks+tid];
+    // }
+
+    // atomicAdd(&risk[bid], work * randomWeights[tid]);
+    // __syncthreads();
+    // if (tid == 0)
+    //     risk[bid] = sqrt(risk[bid]);
 }
 
 __global__ void init_stuff(curandState*state){int idx=blockIdx.x*blockDim.x+threadIdx.x;curand_init(1337,idx,0,&state[idx]);}
@@ -451,8 +500,8 @@ void gpu (int argc, char* argv[]) {
     while (mid * 2 <= argc-1){
         mid *= 2;
     }
-    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))>>>(d_state, d_averages, d_covariance, d_risk, d_reward, argc-1, mid);
-
+    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_averages, d_covariance, d_risk, d_reward, argc-1, mid);
+    printf("Middy %d\n",mid);
     cudaMemcpy(risk, d_risk, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
 
@@ -461,7 +510,11 @@ void gpu (int argc, char* argv[]) {
     //START
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&time, start, stop);
+    cudaError_t code = cudaEventElapsedTime(&time, start, stop);
+    if (code != cudaSuccess) {
+      fprintf(stderr,"GPUassert: %s\n", cudaGetErrorName(code));
+      
+    }
     //END
     printf("Time for portfolio: %f s\n", time/1000);
 
