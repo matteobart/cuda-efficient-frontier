@@ -10,6 +10,7 @@
 //freq: Weekly
 #define NUM_ELEMENTS 100 //why when I change this everything breaks
 #define NUM_PORTFOLIOS atoi(argv[argc])
+#define MAX_NUM_OF_STOCKS 158
 
 
 float* readFile(char* filename){
@@ -192,7 +193,9 @@ void gold(int argc, char* argv[]){
 
 }
 
-__constant__ float c_returns[1000];
+__constant__ float c_returns[MAX_NUM_OF_STOCKS * 99];
+__constant__ float c_averages[MAX_NUM_OF_STOCKS];
+__constant__ float c_std[MAX_NUM_OF_STOCKS];
 
 __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfStocks)
 {
@@ -217,14 +220,14 @@ __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfS
 }
 
 //where mid is greater power of 2 less than or equal to number of elements
-__global__ void GReduceAverage(float* returns, float* average, int numOfStocks, int mid){
+__global__ void GReduceAverage(float* average, int numOfStocks, int mid){
     int returnId = threadIdx.x;
     //int stockId = blockIdx.x;
     //int dim = blockDim.x;
 
     float tot = 0; 
     for(int a = 0; a < NUM_ELEMENTS-1; a++){
-        tot += returns[a+(returnId*(NUM_ELEMENTS-1))];
+        tot += c_returns[a+(returnId*(NUM_ELEMENTS-1))];
     }
     average[returnId] = tot / (float) (NUM_ELEMENTS-1);
     /*
@@ -243,12 +246,12 @@ __global__ void GReduceAverage(float* returns, float* average, int numOfStocks, 
 }
 
 
-__global__ void GStd(float* returns, float* averages, float* std, int numOfStocks, int mid){
+__global__ void GStd(float* std, int numOfStocks, int mid){
     extern __shared__ float s_std[];
     int returnId = threadIdx.x;
     int stockId = blockIdx.x;
     int dim = blockDim.x;
-    float add = powf(returns[stockId*(NUM_ELEMENTS-1)+returnId]-averages[stockId], 2);
+    float add = powf(c_returns[stockId*(NUM_ELEMENTS-1)+returnId]-c_averages[stockId], 2);
     s_std[returnId] = add;
     __syncthreads();
 
@@ -275,7 +278,7 @@ __global__ void GStd(float* returns, float* averages, float* std, int numOfStock
     }
 }   
 
-__global__ void GCovariance(float* returns, float* averages,float* covariance, int numberOfStocks){
+__global__ void GCovariance(float* covariance, int numberOfStocks){
    // __shared__ float s_returns[]
 
     int b = threadIdx.x;
@@ -283,14 +286,14 @@ __global__ void GCovariance(float* returns, float* averages,float* covariance, i
 
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
-        sum += (returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
+        sum += (c_returns[a*(NUM_ELEMENTS-1)+c] - c_averages[a]) * (c_returns[b*(NUM_ELEMENTS-1)+c] - c_averages[b]);
     
     sum /= NUM_ELEMENTS-2;
     covariance[a*numberOfStocks+b] = sum;
 }
 
 
-__global__ void GPortfolio(curandState*state, float* averages, float* covariance, float* risk, float* reward, int numberOfStocks, int mid){
+__global__ void GPortfolio(curandState*state, float* covariance, float* risk, float* reward, int numberOfStocks, int mid){
     //obscene amount of global calls here
     //only one call to risk[] and reward[] at the end
     //also there might be a GPU version of sqrt()
@@ -342,7 +345,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     //FAST
 
 
-    scratch[tid] = averages[tid]*randomWeights[tid];
+    scratch[tid] = c_averages[tid]*randomWeights[tid];
     __syncthreads();
     if (tid >= mid){
         scratch[tid-mid] += scratch[tid];
@@ -431,7 +434,7 @@ void gpu (int argc, char* argv[]) {
     dim3 blockSize (NUM_ELEMENTS-1, argc-1);
     GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_returns, argc-1);
     cudaMemcpy(returns, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    cudaDeviceSynchronize(); //is this needed here
     cudaMemcpyToSymbol(c_returns, returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
     for (int a = 0; a < (argc-1); a++){
@@ -451,8 +454,9 @@ void gpu (int argc, char* argv[]) {
     //smater
     //GReduceAverage<<<argc-1, NUM_ELEMENTS/2>>>(d_work, d_averages, argc-1, mid);
     //dumber
-    GReduceAverage<<<1, argc-1>>>(d_work, d_averages, argc-1, mid);
+    GReduceAverage<<<1, argc-1>>>(d_averages, argc-1, mid);
     cudaMemcpy(averages, d_averages, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
+    cudaMemcpyToSymbol(c_averages, averages, sizeof(float) * (argc-1));
 
     for (int a = 0; a < argc-1; a++){
         printf("avg %d: %f\n", a, averages[a]);
@@ -463,10 +467,11 @@ void gpu (int argc, char* argv[]) {
     float* d_std;
     cudaMalloc(&d_std, sizeof(float)*(argc-1)); 
 
-    GStd<<<argc-1, NUM_ELEMENTS-1, sizeof(float)*(NUM_ELEMENTS-1)>>>(d_returns, d_averages, d_std, argc-1, mid);
+    GStd<<<argc-1, NUM_ELEMENTS-1, sizeof(float)*(NUM_ELEMENTS-1)>>>(d_std, argc-1, mid);
 
     cudaMemcpy(std, d_std, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
-    
+    cudaMemcpyToSymbol(c_std, std, sizeof(float) * (argc-1));
+
     for (int a = 0; a < argc-1; a++){
         printf("Std %d: %f \n", a, std[a]);
     }
@@ -477,7 +482,7 @@ void gpu (int argc, char* argv[]) {
     
     blockSize.x = argc-1;
     blockSize.y = argc-1;
-    GCovariance<<<1,blockSize>>>(d_returns, d_averages, d_covariance, argc-1);
+    GCovariance<<<1,blockSize>>>(d_covariance, argc-1);
     cudaMemcpy(covariance, d_covariance, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
 
     for (int a = 0; a < argc-1; a++){
@@ -509,7 +514,7 @@ void gpu (int argc, char* argv[]) {
     while (mid * 2 <= argc-1){
         mid *= 2;
     }
-    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_averages, d_covariance, d_risk, d_reward, argc-1, mid);
+    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_covariance, d_risk, d_reward, argc-1, mid);
     printf("Middy %d\n",mid);
     cudaMemcpy(risk, d_risk, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
