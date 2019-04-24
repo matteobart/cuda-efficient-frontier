@@ -192,6 +192,8 @@ void gold(int argc, char* argv[]){
 
 }
 
+__constant__ float c_returns[1000];
+
 __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfStocks)
 {
     __shared__ float closing[NUM_ELEMENTS];
@@ -250,8 +252,12 @@ __global__ void GStd(float* returns, float* averages, float* std, int numOfStock
     s_std[returnId] = add;
     __syncthreads();
 
-    if (returnId<mid && returnId+mid<dim){
-        s_std[returnId]+=s_std[returnId+mid];
+    //if (returnId<mid && returnId+mid<dim){
+    //    s_std[returnId]+=s_std[returnId+mid];
+    //}
+
+    if (returnId>=mid){
+        s_std[returnId-mid]+=s_std[returnId];
     }
     __syncthreads();
     for (int s = mid/2; s > 0; s/=2){
@@ -277,7 +283,7 @@ __global__ void GCovariance(float* returns, float* averages,float* covariance, i
 
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
-        sum += (returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
+        sum += (c_returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (c_returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
     
     sum /= NUM_ELEMENTS-2;
     covariance[a*numberOfStocks+b] = sum;
@@ -306,7 +312,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     randomWeights[tid] = r;
     __syncthreads();
     //quick reduce
-    if (tid > mid){
+    if (tid >= mid){
     //if (tid<mid && tid+mid<numberOfStocks){
         //randomWeights[tid] += randomWeights[tid+mid];
 
@@ -338,7 +344,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
 
     scratch[tid] = averages[tid]*randomWeights[tid];
     __syncthreads();
-    if (tid > mid){
+    if (tid >= mid){
         scratch[tid-mid] += scratch[tid];
         if (tid >= numberOfStocks) printf("%d\n", tid);
         if (tid-mid < 0) printf("%d", tid-mid);
@@ -370,7 +376,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
     scratch[tid] = work*randomWeights[tid];
 
     __syncthreads();
-    if (tid > mid){
+    if (tid >= mid){
         scratch[tid-mid] += scratch[tid];
     }
     __syncthreads();
@@ -396,6 +402,7 @@ __global__ void GPortfolio(curandState*state, float* averages, float* covariance
 
 __global__ void init_stuff(curandState*state){int idx=blockIdx.x*blockDim.x+threadIdx.x;curand_init(1337,idx,0,&state[idx]);}
 
+
 void gpu (int argc, char* argv[]) {
     argc--;
     float* closingPrices = (float*) malloc(sizeof(float)*(argc-1)*NUM_ELEMENTS);
@@ -414,6 +421,7 @@ void gpu (int argc, char* argv[]) {
     float* d_returns;
     cudaMalloc(&d_returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
+
     float* d_averages;
     cudaMalloc(&d_averages, sizeof(float) * (argc-1));
 
@@ -423,7 +431,8 @@ void gpu (int argc, char* argv[]) {
     dim3 blockSize (NUM_ELEMENTS-1, argc-1);
     GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_returns, argc-1);
     cudaMemcpy(returns, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
-    //calculate the average
+    cudaDeviceSynchronize();
+    cudaMemcpyToSymbol(c_returns, returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
     for (int a = 0; a < (argc-1); a++){
         for (int b = 0; b < (NUM_ELEMENTS-1); b++){
