@@ -283,7 +283,7 @@ __global__ void GCovariance(float* returns, float* averages,float* covariance, i
 
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
-        sum += (c_returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (c_returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
+        sum += (returns[a*(NUM_ELEMENTS-1)+c] - averages[a]) * (returns[b*(NUM_ELEMENTS-1)+c] - averages[b]);
     
     sum /= NUM_ELEMENTS-2;
     covariance[a*numberOfStocks+b] = sum;
