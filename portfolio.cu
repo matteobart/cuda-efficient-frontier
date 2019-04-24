@@ -12,6 +12,7 @@
 #define NUM_PORTFOLIOS atoi(argv[argc])
 #define MAX_NUM_OF_STOCKS 85
 
+#define DEBUG 0
 
 float* readFile(char* filename){
     float* ret = (float*) malloc(NUM_ELEMENTS*sizeof(float));
@@ -79,21 +80,22 @@ void gold(int argc, char* argv[]){
     float** closingPrices = (float**) malloc(sizeof(float*)*(argc-1));
     float** returns = (float**) malloc(sizeof(float*)*(argc-1));
     float* averages = (float*) malloc(sizeof(float)*(argc-1));
-    printf("%s\n", "here");
     for (int a = 1; a < argc; a++){
         closingPrices[a-1] = readFile(argv[a]);
         returns[a-1] = getPercentReturns(closingPrices[a-1], NUM_ELEMENTS);
         averages[a-1] = getAverage(returns[a-1], NUM_ELEMENTS-1);
     }
 
-    for (int a = 0; a < (argc-1); a++){
-        for (int b = 0; b < (NUM_ELEMENTS-1); b++){
-            printf("Returns %d %d: %f \n", a, b, returns[a][b]);
+    if (DEBUG){
+        for (int a = 0; a < (argc-1); a++){
+            for (int b = 0; b < (NUM_ELEMENTS-1); b++){
+                printf("Returns %d %d: %f \n", a, b, returns[a][b]);
+            }
         }
-    }
 
-    for (int a = 0; a < argc-1; a++){
-        printf("avg %d: %f\n", a, averages[a]);
+        for (int a = 0; a < argc-1; a++){
+            printf("avg %d: %f\n", a, averages[a]);
+        }
     }
 
     //calculate the standard deviation
@@ -105,9 +107,10 @@ void gold(int argc, char* argv[]){
         std[a] /= NUM_ELEMENTS-2;
         std[a] = sqrt(std[a]);
     }
-
-    for (int a = 0; a < argc-1; a++){
-        printf("Std %d: %f \n", a, std[a]);
+    if (DEBUG) {
+        for (int a = 0; a < argc-1; a++){
+            printf("Std %d: %f \n", a, std[a]);
+        }
     }
 
     //calculate the covariances for each of the stocks 
@@ -122,7 +125,6 @@ void gold(int argc, char* argv[]){
             }
             sum /= NUM_ELEMENTS-2;
             covariance[a][b] = sum;
-            printf("%f\n", sum);
         }
     }
 
@@ -172,7 +174,7 @@ void gold(int argc, char* argv[]){
         }
 
         risk[a] = sqrt(totalRisk);
-        if (a==0){
+        if (a==0 && DEBUG){
             for (int r = 0; r < argc-1;r++) printf("randomWeights: %f\n", randomWeights[r]);
             printf("Risk: %f\n", risk[a]);
             for (int r = 0; r < argc-1; r++){
@@ -438,9 +440,11 @@ void gpu (int argc, char* argv[]) {
     cudaDeviceSynchronize(); //is this needed here
     cudaMemcpyToSymbol(c_returns, returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
-    for (int a = 0; a < (argc-1); a++){
-        for (int b = 0; b < (NUM_ELEMENTS-1); b++){
-            printf("Returns %d %d: %f \n", a, b, returns[a*(NUM_ELEMENTS-1)+b]);
+    if (DEBUG){
+        for (int a = 0; a < (argc-1); a++){
+            for (int b = 0; b < (NUM_ELEMENTS-1); b++){
+                printf("Returns %d %d: %f \n", a, b, returns[a*(NUM_ELEMENTS-1)+b]);
+            }
         }
     }
 
@@ -459,9 +463,11 @@ void gpu (int argc, char* argv[]) {
     cudaMemcpy(averages, d_averages, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_averages, averages, sizeof(float) * (argc-1));
 
-    for (int a = 0; a < argc-1; a++){
-        printf("avg %d: %f\n", a, averages[a]);
-    }
+    if (DEBUG){
+        for (int a = 0; a < argc-1; a++){
+            printf("avg %d: %f\n", a, averages[a]);
+        }
+    }   
 
     float* std = (float*) malloc(sizeof(float)*(argc-1));
 
@@ -473,8 +479,10 @@ void gpu (int argc, char* argv[]) {
     cudaMemcpy(std, d_std, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_std, std, sizeof(float) * (argc-1));
 
-    for (int a = 0; a < argc-1; a++){
-        printf("Std %d: %f \n", a, std[a]);
+    if (DEBUG){
+        for (int a = 0; a < argc-1; a++){
+            printf("Std %d: %f \n", a, std[a]);
+        }
     }
 
     float* covariance = (float*) malloc(sizeof(float)*(argc-1)*(argc-1));//2D like array
@@ -487,9 +495,11 @@ void gpu (int argc, char* argv[]) {
     cudaMemcpy(covariance, d_covariance, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_covariance, covariance, sizeof(float) * (argc-1)*(argc-1));
 
-    for (int a = 0; a < argc-1; a++){
-        for (int b = 0; b <argc-1; b++){
-            printf("Cov %d %d: %f\n", a, b, covariance[a*(argc-1)+b]);
+    if (DEBUG){
+        for (int a = 0; a < argc-1; a++){
+            for (int b = 0; b <argc-1; b++){
+                printf("Cov %d %d: %f\n", a, b, covariance[a*(argc-1)+b]);
+            }
         }
     }
 
@@ -517,7 +527,6 @@ void gpu (int argc, char* argv[]) {
         mid *= 2;
     }
     GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_risk, d_reward, argc-1, mid);
-    printf("Middy %d\n",mid);
     cudaMemcpy(risk, d_risk, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
 
