@@ -186,9 +186,9 @@ void gold(int argc, char* argv[]){
     }
 
     diff = clock() - start;
-    int msec = diff * 1000 / CLOCKS_PER_SEC;
-    printf("Time taken for just portfolios %d seconds %d milliseconds\n", msec/1000, msec%1000);
-    
+    float msec = (float) diff * 1000 / (float) CLOCKS_PER_SEC;
+    printf("CPU time portfolio %f seconds\n", msec/1000);
+
 
     //plot the data
     writeFile("riskreturngold.txt", reward, risk, NUM_PORTFOLIOS);
@@ -217,35 +217,45 @@ __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfS
         returns[to] = (closing[returnId+1]-closing[returnId])/closing[returnId];
 
     }
-    //int grab2 = returnId+1 + (stockId * NUM_ELEMENTS); 
-
-    //returns[to] = (closingPrices[grab2]-closingPrices[grab1])/closingPrices[grab1];
 }
+__global__ void GReduceAverageR(float* average, int numOfStocks, int mid){
+    __shared__ float reduce[99];
 
-//where mid is greater power of 2 less than or equal to number of elements
-__global__ void GReduceAverage(float* average, int numOfStocks, int mid){
     int returnId = threadIdx.x;
-    //int stockId = blockIdx.x;
-    //int dim = blockDim.x;
+    int stockId = blockIdx.x;
+    int dim = blockDim.x;
+
+
+    reduce[returnId] = c_returns[returnId + (stockId*dim)];
+    __syncthreads();
+
+    if (returnId>=mid){
+        reduce[returnId-mid]+=reduce[returnId];
+    }
+    __syncthreads();
+
+    for (int s = mid/2; s > 0; s/=2){
+        if (returnId < s) {
+            reduce[returnId] += reduce[returnId+s];
+        }
+        __syncthreads();
+    }
+
+    if(returnId == 0){
+        average[stockId] = reduce[0]/99.0;
+    }
+    
+}
+//ORIGINAL
+__global__ void GReduceAverageS(float* average, int numOfStocks, int mid){
+    int returnId = threadIdx.x;
 
     float tot = 0; 
     for(int a = 0; a < NUM_ELEMENTS-1; a++){
         tot += c_returns[a+(returnId*(NUM_ELEMENTS-1))];
     }
     average[returnId] = tot / (float) (NUM_ELEMENTS-1);
-    /*
-    if (returnId<mid && returnId+mid<dim){
-        returns[(stockId*dim)+returnId]+=returns[(stockId*dim)+returnId+mid];
-    }
-    for (int s = mid/2; s > 0; s/=2){
-        if (returnId < s) {
-            returns[(stockId*dim)+returnId] += returns[(stockId*dim)+returnId+s];
-        }
-    }
-    if(returnId == 0){
-        average[stockId] = returns[stockId*dim]/dim;
-    }*/
-    
+
 }
 
 
@@ -253,14 +263,9 @@ __global__ void GStd(float* std, int numOfStocks, int mid){
     extern __shared__ float s_std[];
     int returnId = threadIdx.x;
     int stockId = blockIdx.x;
-    int dim = blockDim.x;
     float add = powf(c_returns[stockId*(NUM_ELEMENTS-1)+returnId]-c_averages[stockId], 2);
     s_std[returnId] = add;
     __syncthreads();
-
-    //if (returnId<mid && returnId+mid<dim){
-    //    s_std[returnId]+=s_std[returnId+mid];
-    //}
 
     if (returnId>=mid){
         s_std[returnId-mid]+=s_std[returnId];
@@ -273,8 +278,6 @@ __global__ void GStd(float* std, int numOfStocks, int mid){
         __syncthreads();
     }
 
-
-    //atomicAdd(&std[stockId], powf(returns[stockId*(NUM_ELEMENTS-1)+returnId]-averages[stockId], 2));
     __syncthreads();
     if (returnId == 0) {
         std[stockId]= sqrt(s_std[0]/(NUM_ELEMENTS-2));
@@ -282,10 +285,8 @@ __global__ void GStd(float* std, int numOfStocks, int mid){
 }   
 
 __global__ void GCovariance(float* covariance, int numberOfStocks){
-   // __shared__ float s_returns[]
-
     int b = threadIdx.x;
-    int a = threadIdx.y;
+    int a = blockIdx.x;
 
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
@@ -296,7 +297,7 @@ __global__ void GCovariance(float* covariance, int numberOfStocks){
 }
 
 
-__global__ void GPortfolio(curandState*state, float* risk, float* reward, int numberOfStocks, int mid){
+__global__ void GPortfolio(float* risk, float* reward, int numberOfStocks, int mid){
     //obscene amount of global calls here
     //only one call to risk[] and reward[] at the end
     //also there might be a GPU version of sqrt()
@@ -311,7 +312,9 @@ __global__ void GPortfolio(curandState*state, float* risk, float* reward, int nu
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
-    float r = curand_uniform(&state[tid+bid*blockDim.x]);
+    curandState state;
+    curand_init(tid+bid*blockDim.x,10,0,&state);
+    float r = curand_uniform(&state);
     
     //RAN WEIGHT
     //FAST- WORKS
@@ -406,9 +409,6 @@ __global__ void GPortfolio(curandState*state, float* risk, float* reward, int nu
     //     risk[bid] = sqrt(risk[bid]);
 }
 
-__global__ void init_stuff(curandState*state){int idx=blockIdx.x*blockDim.x+threadIdx.x;curand_init(1337,idx,0,&state[idx]);}
-
-
 void gpu (int argc, char* argv[]) {
     argc--;
     float* closingPrices = (float*) malloc(sizeof(float)*(argc-1)*NUM_ELEMENTS);
@@ -434,10 +434,8 @@ void gpu (int argc, char* argv[]) {
     cudaMemcpy(d_closingPrices, closingPrices, sizeof(float)*(argc-1)*NUM_ELEMENTS, cudaMemcpyHostToDevice);
 
 
-    dim3 blockSize (NUM_ELEMENTS-1, argc-1);
     GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_returns, argc-1);
     cudaMemcpy(returns, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize(); //is this needed here
     cudaMemcpyToSymbol(c_returns, returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
     if (DEBUG){
@@ -448,18 +446,13 @@ void gpu (int argc, char* argv[]) {
         }
     }
 
-    float* d_work; //should be init with returns
-    cudaMalloc(&d_work, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1));
-    cudaMemcpy(d_work, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1),cudaMemcpyDeviceToDevice);
-    //NUM_ELEMENTS/2 because its reduce... may change
     int mid = 1;
     while (mid * 2 <= NUM_ELEMENTS-1) {
         mid *= 2;
     }
-    //smater
-    //GReduceAverage<<<argc-1, NUM_ELEMENTS/2>>>(d_work, d_averages, argc-1, mid);
-    //dumber
-    GReduceAverage<<<1, argc-1>>>(d_averages, argc-1, mid);
+
+    GReduceAverageR<<<argc-1, NUM_ELEMENTS-1>>>(d_averages, argc-1, mid);
+
     cudaMemcpy(averages, d_averages, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_averages, averages, sizeof(float) * (argc-1));
 
@@ -489,9 +482,7 @@ void gpu (int argc, char* argv[]) {
     float* d_covariance;
     cudaMalloc(&d_covariance, sizeof(float)*(argc-1)*(argc-1));
     
-    blockSize.x = argc-1;
-    blockSize.y = argc-1;
-    GCovariance<<<1,blockSize>>>(d_covariance, argc-1);
+    GCovariance<<<argc-1,argc-1>>>(d_covariance, argc-1);
     cudaMemcpy(covariance, d_covariance, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_covariance, covariance, sizeof(float) * (argc-1)*(argc-1));
 
@@ -518,15 +509,11 @@ void gpu (int argc, char* argv[]) {
     cudaMalloc(&d_risk, sizeof(float)*NUM_PORTFOLIOS);
     cudaMalloc(&d_reward, sizeof(float)*NUM_PORTFOLIOS);
 
-    curandState*d_state;
-    cudaMalloc(&d_state,(argc-1)*NUM_PORTFOLIOS);
-    init_stuff<<<NUM_PORTFOLIOS,argc-1>>>(d_state);
-
     mid = 1;
     while (mid * 2 <= argc-1){
         mid *= 2;
     }
-    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_state, d_risk, d_reward, argc-1, mid);
+    GPortfolio<<<NUM_PORTFOLIOS, argc-1, (sizeof(float)*(argc-1))*2>>>(d_risk, d_reward, argc-1, mid);
     cudaMemcpy(risk, d_risk, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
     cudaMemcpy(reward, d_reward, sizeof(float)*NUM_PORTFOLIOS, cudaMemcpyDeviceToHost);
 
@@ -555,19 +542,21 @@ void gpu (int argc, char* argv[]) {
 
 int main( int argc, char* argv[])
 {
+    printf("Num stocks: %i \n", argc-2);
+    printf("Num port: %i \n", atoi(argv[argc-1]));
 
     clock_t start = clock(), diff;
     gold(argc, argv);
     diff = clock() - start;
-    int msec = diff * 1000 / CLOCKS_PER_SEC;
-    printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+    float msec = (float) diff * 1000 / (float) CLOCKS_PER_SEC;
+    printf("Total CPU time taken %f seconds\n", msec/1000);
     
 
     clock_t start2 = clock(), diff2;
     gpu(argc, argv);
     diff2 = clock() - start2;
-    int msec2 = diff2 * 1000 / CLOCKS_PER_SEC;
-    printf("Time taken %d seconds %d milliseconds\n", msec2/1000, msec2%1000);
+    float msec2 = (float) diff2 * 1000 / (float) CLOCKS_PER_SEC;
+    printf("Total GPU time taken %f seconds \n", msec2/1000);
 
 
     return 0;
