@@ -98,21 +98,6 @@ void gold(int argc, char* argv[]){
         }
     }
 
-    //calculate the standard deviation
-    float* std = (float*) malloc(sizeof(float)*(argc-1));
-    for (int a = 0; a < argc-1; a++){
-        for (int b = 0; b < NUM_ELEMENTS-1; b++){
-            std[a] += pow(returns[a][b]-averages[a], 2);   
-        }
-        std[a] /= NUM_ELEMENTS-2;
-        std[a] = sqrt(std[a]);
-    }
-    if (DEBUG) {
-        for (int a = 0; a < argc-1; a++){
-            printf("Std %d: %f \n", a, std[a]);
-        }
-    }
-
     //calculate the covariances for each of the stocks 
     //doing extra things [0][4] will be the same as [4][0]
     float** covariance = (float**) malloc(sizeof(float*)*(argc-1));
@@ -127,6 +112,13 @@ void gold(int argc, char* argv[]){
             covariance[a][b] = sum;
         }
     }
+    //retiming -malloc, transfers -constant *
+    //transpose data array vs constant *
+    //cutting down on local variables in portfolios
+    //remove std all together *
+    //move all the constants to pt2
+    //dont double calculate for the covariance *
+    //where do you put the write file *
 
     //time to choose the weights for the given portfolios
     //PSUDEO:
@@ -139,7 +131,7 @@ void gold(int argc, char* argv[]){
    
     srand(time(NULL));   // Initialization, should only be called once.
     float* risk = (float*) malloc(sizeof(float)* NUM_PORTFOLIOS);
-    float* reward =(float*) malloc(sizeof(float)* NUM_PORTFOLIOS);
+    float* reward = (float*) malloc(sizeof(float)* NUM_PORTFOLIOS);
     for (int a = 0; a < NUM_PORTFOLIOS; a++){//find the risk & reward for each portfolio
         float randomWeights[argc-1]; //may actually want to save this for later
         int totalWeight = 0;
@@ -191,13 +183,12 @@ void gold(int argc, char* argv[]){
 
 
     //plot the data
-    writeFile("riskreturngold.txt", reward, risk, NUM_PORTFOLIOS);
+    if (DEBUG) writeFile("riskreturngold.txt", reward, risk, NUM_PORTFOLIOS);
 
 }
 
 __constant__ float c_returns[MAX_NUM_OF_STOCKS * 99];
 __constant__ float c_averages[MAX_NUM_OF_STOCKS];
-__constant__ float c_std[MAX_NUM_OF_STOCKS];
 __constant__ float c_covariance[MAX_NUM_OF_STOCKS*MAX_NUM_OF_STOCKS];
 
 __global__ void GPercentReturns(float* closingPrices, float* returns, int numOfStocks)
@@ -241,52 +232,17 @@ __global__ void GReduceAverageR(float* average, int numOfStocks, int mid){
         __syncthreads();
     }
 
-    if(returnId == 0){
-        average[stockId] = reduce[0]/99.0;
-    }
+    //REMOVED IF
+    if (returnId == 0) average[stockId] = reduce[0]/99.0;
     
 }
-//ORIGINAL
-__global__ void GReduceAverageS(float* average, int numOfStocks, int mid){
-    int returnId = threadIdx.x;
 
-    float tot = 0; 
-    for(int a = 0; a < NUM_ELEMENTS-1; a++){
-        tot += c_returns[a+(returnId*(NUM_ELEMENTS-1))];
-    }
-    average[returnId] = tot / (float) (NUM_ELEMENTS-1);
-
-}
-
-
-__global__ void GStd(float* std, int numOfStocks, int mid){
-    extern __shared__ float s_std[];
-    int returnId = threadIdx.x;
-    int stockId = blockIdx.x;
-    float add = powf(c_returns[stockId*(NUM_ELEMENTS-1)+returnId]-c_averages[stockId], 2);
-    s_std[returnId] = add;
-    __syncthreads();
-
-    if (returnId>=mid){
-        s_std[returnId-mid]+=s_std[returnId];
-    }
-    __syncthreads();
-    for (int s = mid/2; s > 0; s/=2){
-        if (returnId < s) {
-            s_std[returnId]+=s_std[returnId+s];
-        }
-        __syncthreads();
-    }
-
-    __syncthreads();
-    if (returnId == 0) {
-        std[stockId]= sqrt(s_std[0]/(NUM_ELEMENTS-2));
-    }
-}   
-
+//try flipping the memory 
 __global__ void GCovariance(float* covariance, int numberOfStocks){
     int b = threadIdx.x;
     int a = blockIdx.x;
+
+    if (a > b) return;
 
     float sum = 0;
     for (int c = 0; c < NUM_ELEMENTS-1; c++)
@@ -294,6 +250,7 @@ __global__ void GCovariance(float* covariance, int numberOfStocks){
     
     sum /= NUM_ELEMENTS-2;
     covariance[a*numberOfStocks+b] = sum;
+    covariance[b*numberOfStocks+a] = sum;
 }
 
 
@@ -322,9 +279,6 @@ __global__ void GPortfolio(float* risk, float* reward, int numberOfStocks, int m
     __syncthreads();
     //quick reduce
     if (tid >= mid){
-    //if (tid<mid && tid+mid<numberOfStocks){
-        //randomWeights[tid] += randomWeights[tid+mid];
-
         randomWeights[tid-mid] += randomWeights[tid];
     }
     __syncthreads();
@@ -337,15 +291,6 @@ __global__ void GPortfolio(float* risk, float* reward, int numberOfStocks, int m
     float totalWeight = randomWeights[0];
     __syncthreads();
     randomWeights[tid] = (float) r/ totalWeight;
-
-    //SLOW-IGNORE
-    // randomWeights[tid] = r;
-    // __syncthreads();
-    // atomicAdd(&randomWeights[0], r);
-    // __syncthreads();
-    // float totalWeight = randomWeights[0];
-    // __syncthreads();
-    // randomWeights[tid] = r/totalWeight;
 
     //RETURN
     //FAST
@@ -362,19 +307,13 @@ __global__ void GPortfolio(float* risk, float* reward, int numberOfStocks, int m
     for (int s = mid/2; s > 0; s /= 2){
         if (tid < s) {
             scratch[tid] += scratch[tid+s];
-            //printf("i %d %d\n",tid ,tid+s);
 
         }
         __syncthreads();
     }
-    reward[bid] = scratch[0];
+    if (tid == 0) reward[bid] = scratch[0];
     __syncthreads();
 
-    //SLOW
-    // reward[bid] = 0;
-    // atomicAdd(&reward[bid], averages[tid]*randomWeights[tid]);
-    // __syncthreads();
-    //if (tid == 0) printf("%d: %f %f\n", bid, reward[bid], deleteMe);
 
     //RISK
     //FAST
@@ -395,18 +334,9 @@ __global__ void GPortfolio(float* risk, float* reward, int numberOfStocks, int m
             scratch[tid] += scratch[tid+s];
         __syncthreads();
     }
-    risk[bid] = sqrt(scratch[0]);
 
-    //SLOW
-    // float work = 0;
-    // for (int c = 0; c < numberOfStocks; c++){
-    //      work += randomWeights[c]*covariance[c*numberOfStocks+tid];
-    // }
+    if (tid == 0) risk[bid] = sqrt(scratch[0]);
 
-    // atomicAdd(&risk[bid], work * randomWeights[tid]);
-    // __syncthreads();
-    // if (tid == 0)
-    //     risk[bid] = sqrt(risk[bid]);
 }
 
 void gpu (int argc, char* argv[]) {
@@ -414,6 +344,8 @@ void gpu (int argc, char* argv[]) {
     float* closingPrices = (float*) malloc(sizeof(float)*(argc-1)*NUM_ELEMENTS);
     float* returns = (float*) malloc(sizeof(float)*(argc-1)*(NUM_ELEMENTS-1));
     float* averages = (float*) malloc(sizeof(float)*(argc-1));
+    float* std = (float*) malloc(sizeof(float)*(argc-1));
+    float* covariance = (float*) malloc(sizeof(float)*(argc-1)*(argc-1));
 
     for (int a = 1; a < argc; a++){
         float* add = readFile(argv[a]);
@@ -424,18 +356,15 @@ void gpu (int argc, char* argv[]) {
     float* d_closingPrices;
     cudaMalloc(&d_closingPrices, sizeof(float) * (argc-1)*NUM_ELEMENTS);
 
-    float* d_returns;
-    cudaMalloc(&d_returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
+    float* d_all;
+    cudaMalloc(&d_all, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
-
-    float* d_averages;
-    cudaMalloc(&d_averages, sizeof(float) * (argc-1));
 
     cudaMemcpy(d_closingPrices, closingPrices, sizeof(float)*(argc-1)*NUM_ELEMENTS, cudaMemcpyHostToDevice);
 
 
-    GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_returns, argc-1);
-    cudaMemcpy(returns, d_returns, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
+    GPercentReturns<<<argc-1,NUM_ELEMENTS>>>(d_closingPrices, d_all, argc-1);
+    cudaMemcpy(returns, d_all, sizeof(float)*(argc-1)*(NUM_ELEMENTS-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_returns, returns, sizeof(float) * (argc-1)*(NUM_ELEMENTS-1));
 
     if (DEBUG){
@@ -451,9 +380,9 @@ void gpu (int argc, char* argv[]) {
         mid *= 2;
     }
 
-    GReduceAverageR<<<argc-1, NUM_ELEMENTS-1>>>(d_averages, argc-1, mid);
+    GReduceAverageR<<<argc-1, NUM_ELEMENTS-1>>>(d_all, argc-1, mid);
 
-    cudaMemcpy(averages, d_averages, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
+    cudaMemcpy(averages, d_all, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_averages, averages, sizeof(float) * (argc-1));
 
     if (DEBUG){
@@ -461,29 +390,10 @@ void gpu (int argc, char* argv[]) {
             printf("avg %d: %f\n", a, averages[a]);
         }
     }   
-
-    float* std = (float*) malloc(sizeof(float)*(argc-1));
-
-    float* d_std;
-    cudaMalloc(&d_std, sizeof(float)*(argc-1)); 
-
-    GStd<<<argc-1, NUM_ELEMENTS-1, sizeof(float)*(NUM_ELEMENTS-1)>>>(d_std, argc-1, mid);
-
-    cudaMemcpy(std, d_std, sizeof(float)*(argc-1), cudaMemcpyDeviceToHost);
-    cudaMemcpyToSymbol(c_std, std, sizeof(float) * (argc-1));
-
-    if (DEBUG){
-        for (int a = 0; a < argc-1; a++){
-            printf("Std %d: %f \n", a, std[a]);
-        }
-    }
-
-    float* covariance = (float*) malloc(sizeof(float)*(argc-1)*(argc-1));//2D like array
-    float* d_covariance;
-    cudaMalloc(&d_covariance, sizeof(float)*(argc-1)*(argc-1));
     
-    GCovariance<<<argc-1,argc-1>>>(d_covariance, argc-1);
-    cudaMemcpy(covariance, d_covariance, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
+    GCovariance<<<argc-1,argc-1>>>(d_all, argc-1);
+
+    cudaMemcpy(covariance, d_all, sizeof(float)*(argc-1)*(argc-1), cudaMemcpyDeviceToHost);
     cudaMemcpyToSymbol(c_covariance, covariance, sizeof(float) * (argc-1)*(argc-1));
 
     if (DEBUG){
@@ -530,7 +440,7 @@ void gpu (int argc, char* argv[]) {
     //END
     printf("Time for portfolio: %f s\n", time/1000);
 
-    writeFile("riskreturn.txt", reward, risk, NUM_PORTFOLIOS);
+    if (DEBUG) writeFile("riskreturn.txt", reward, risk, NUM_PORTFOLIOS);
 
 }
 //to plot
